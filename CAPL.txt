@@ -1,0 +1,721 @@
+/*@!Encoding:1252*/
+variables
+{
+
+const int TRUE = 1;
+const int FALSE = 0;
+const int HEIGHT_COUNT = 6;
+const int ENTRY = 0;
+const int AER = 1;
+const int ARH = 2;
+const int NRH = 3;
+const int OFF1 = 4;
+const int OFF2 = 5; 
+const int CHANNEL_COUNT = 4;
+const int LF_CORNER = 0;
+const int RF_CORNER = 1;
+const int LR_CORNER = 2;
+const int RR_CORNER = 3;
+const int AXLE_COUNT = 2;
+const int c_default_duty_cycle = 50;  // %
+const int c_default_temperature = 25;   // C
+const int c_Tester_Manifold_Pressure_Max_Voltage = 5;  //
+const int c_Tester_Temperature_Max_Voltage = 5;  //
+                                              /* Entry, Aero, ARH, NRH, Off1, Off2 */
+float k_Trim_Height[AXLE_COUNT][HEIGHT_COUNT]; // mm
+
+float Spring_Height_Percentage[CHANNEL_COUNT] = {0.0, 0.0, 0.0, 0.0}; // %
+float Position_DC_Cmd[CHANNEL_COUNT] = {c_default_duty_cycle, c_default_duty_cycle, c_default_duty_cycle, c_default_duty_cycle};
+float IAMM_Temperature = c_default_temperature;
+float Manual_Manifold_Pressure = 0.0;
+float Final_Manifold_Pressure = 0.0;
+float Manifold_Pressure = 0.0;
+float Nominal_Trim_Height[AXLE_COUNT];
+float Compressor_Temperature = c_default_temperature;
+
+msTimer Timer_10ms;
+msTimer Timer_100ms;
+msTimer Timer_LF_Offset;
+msTimer Timer_RF_Offset;
+msTimer Timer_LR_Offset;
+msTimer Timer_RR_Offset;
+
+message Tester_CMD tester_cmd;
+message Tester_CFG tester_cfg;
+
+}
+
+on preStart
+{
+  int i;
+  Nominal_Trim_Height[0] = @Vehicle_Specific::Normal_Height_Ft;
+  Nominal_Trim_Height[1] = @Vehicle_Specific::Normal_Height_Ra;
+  Manual_Manifold_Pressure = @System::Manual_Manifold_Pressure::Value;
+  Manifold_Pressure = @Vehicle::Manifold_Pressure;
+
+  @System::Tester_Active::Enable = TRUE;
+  
+  //Initialize Pneumatic Model Calibrations
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Absolute_Pressure_Offset_Reservoir = @Vehicle_Specific::Absolute_Pressure_Offset_Reservoir;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Absolute_Pressure_Offset_Springs = @Vehicle_Specific::Absolute_Pressure_Offset_Springs;
+  for (i=0;i<2;i++)
+  {
+    @Leveling_Node_GM_GB::Parameters::_Workspace::Axle_Weight_Ft[i] = @Vehicle_Specific::Axle_Weight_Ft[i];
+    @Leveling_Node_GM_GB::Parameters::_Workspace::Axle_Weight_Ra[i] = @Vehicle_Specific::Axle_Weight_Ra[i];
+  }
+
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Exhaust_Pressure_Hysterisis = @Vehicle_Specific::Exhaust_Pressure_Hysterisis;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Manifold_Pressure_Sensor_Fault_Pressure = @Vehicle_Specific::Manifold_Pressure_Sensor_Fault_Pressure;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::MS_TO_MIN_GAIN = @Vehicle_Specific::MS_TO_MIN_GAIN;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Normal_Height_Ft = @Vehicle_Specific::Normal_Height_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Normal_Height_Ra = @Vehicle_Specific::Normal_Height_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Absolute_Max = @Vehicle_Specific::Pressure_Absolute_Max;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Manifold_Max = @Vehicle_Specific::Pressure_Manifold_Max;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Manifold_Min = @Vehicle_Specific::Pressure_Manifold_Min;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Max_Ft = @Vehicle_Specific::Pressure_Max_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Max_Ra = @Vehicle_Specific::Pressure_Max_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Min_Retention_Ft = @Vehicle_Specific::Pressure_Min_Retention_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Min_Retention_Ra = @Vehicle_Specific::Pressure_Min_Retention_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Reservoir_Max = @Vehicle_Specific::Pressure_Reservoir_Max;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Pressure_Reservoir_Min = @Vehicle_Specific::Pressure_Reservoir_Min;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Slow_Leak_Rate = @Vehicle_Specific::Slow_Leak_Rate;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Slow_Leak_Rate_Reservoir = @Vehicle_Specific::Slow_Leak_Rate_Reservoir;
+    
+    
+  for (i=0;i<5;i++)
+  {
+    @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_Breakpoints_Ft[i] = @Vehicle_Specific::Spring_Pressure_Breakpoints_Ft[i];
+    @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_Breakpoints_Ra[i] = @Vehicle_Specific::Spring_Pressure_Breakpoints_Ra[i];
+  }
+  
+//Spring_Pressure_to_relative_position_Ft = [Position_Min_Ft Position_Nominal Position_Max_Ft Position_Max_Ft Position_Max_Ft;
+//    Position_Min_Ft Position_ENT_Ft Position_Nominal Position_RA2_Ft Position_Max_Ft;
+//    Position_Min_Ft Position_Min_Ft Position_Min_Ft Position_Min_Ft Position_Max_Ft]; % [mm]
+//Spring_Pressure_to_relative_position_Ra = [Position_Min_Ra Position_Nominal Position_Max_Ra Position_Max_Ra Position_Max_Ra;
+//    Position_Min_Ra Position_ENT_Ra Position_Nominal Position_RA2_Ra Position_Max_Ra;
+//    Position_Min_Ra Position_Min_Ra Position_Min_Ra Position_Min_Ra Position_Max_Ra]; % [mm]
+
+//Front
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[0][0] = @Vehicle_Specific::Position_Min_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[0][1] = 0;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[0][2] = @Vehicle_Specific::Position_Max_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[0][3] = @Vehicle_Specific::Position_Max_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[0][4] = @Vehicle_Specific::Position_Max_Ft;
+
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[1][0] = @Vehicle_Specific::Position_Min_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[1][1] = @Vehicle_Specific::Min_Height_Offset_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[1][2] = 0;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[1][3] = @Vehicle_Specific::Max_Height_Offset_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[1][4] = @Vehicle_Specific::Position_Max_Ft;
+
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[2][0] = @Vehicle_Specific::Position_Min_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[2][1] = @Vehicle_Specific::Position_Min_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[2][2] = @Vehicle_Specific::Position_Min_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[2][3] = @Vehicle_Specific::Position_Min_Ft;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ft[2][4] = @Vehicle_Specific::Position_Max_Ft;
+
+//Rear
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[0][0] = @Vehicle_Specific::Position_Min_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[0][1] = 0;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[0][2] = @Vehicle_Specific::Position_Max_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[0][3] = @Vehicle_Specific::Position_Max_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[0][4] = @Vehicle_Specific::Position_Max_Ra;
+
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[1][0] = @Vehicle_Specific::Position_Min_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[1][1] = @Vehicle_Specific::Min_Height_Offset_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[1][2] = 0;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[1][3] = @Vehicle_Specific::Max_Height_Offset_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[1][4] = @Vehicle_Specific::Position_Max_Ra;
+
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[2][0] = @Vehicle_Specific::Position_Min_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[2][1] = @Vehicle_Specific::Position_Min_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[2][2] = @Vehicle_Specific::Position_Min_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[2][3] = @Vehicle_Specific::Position_Min_Ra;
+  @Leveling_Node_GM_GB::Parameters::_Workspace::Spring_Pressure_to_relative_position_Ra[2][4] = @Vehicle_Specific::Position_Max_Ra;
+  
+  tester_cfg.Tester_PWM_Freq_LF = @sysvar::Vehicle_Specific::Frequency_Override;
+  tester_cfg.Tester_PWM_Freq_RF = @sysvar::Vehicle_Specific::Frequency_Override;
+  tester_cfg.Tester_PWM_Freq_LR = @sysvar::Vehicle_Specific::Frequency_Override;
+  tester_cfg.Tester_PWM_Freq_RR = @sysvar::Vehicle_Specific::Frequency_Override;
+  tester_cfg.ECU_Relay = @sysvar::System::ECU_Relay;
+  tester_cfg.IGN_HW = @sysvar::System::IGN_HW;
+  tester_cfg.PS_Voltage_Set = @sysvar::System::PS_Voltage::Value*100;
+  tester_cfg.PS_Current_Limit_Set = @sysvar::System::PS_Current_Limit::Value*100;
+
+}
+
+on start
+{
+  writeclear(1); //Clear content of CAPL-page
+
+  setTimer (Timer_10ms, 0);
+  setTimer (Timer_100ms, 10);
+  output(tester_cfg);
+}
+
+on timer Timer_100ms
+{
+    setTimer(Timer_100ms, 100);
+  
+    if (@System::Tester_Active::Enable == TRUE)
+    {
+      Output_Tester_Position_PWM_LF();
+      Output_Tester_Position_PWM_RF();
+      Output_Tester_Position_PWM_LR();
+      Output_Tester_Position_PWM_RR();
+      
+      Output_IAMM_Temperature();
+
+      Determine_PWM_DC();
+      Override_Manifold_Pressure();
+      Output_Tester_Manifold_Pressure_P1();
+      Output_Tester_Manifold_Pressure_P2();
+
+    }
+
+    output(tester_cmd);
+}
+
+on timer Timer_10ms
+{
+    setTimer(Timer_10ms, 10);
+
+    // tester message encoding
+    if (@System::Tester_Active::Enable == TRUE)
+    {
+//      Determine_PWM_DC();
+//      Override_Manifold_Pressure();
+//      Output_Tester_Manifold_Pressure_P1();
+//      Output_Tester_Manifold_Pressure_P2();
+    }
+
+}
+
+Output_Tester_Position_PWM_LF ()
+{
+    word temp;
+    float duty;
+  
+    if (@System::Position_Override_Enable::LF == TRUE)
+    {
+      duty = @System::Position_Override::LF;
+      if (duty < 0.0) duty = 0.0;
+      if (duty > 100.0) duty = 100.0;
+      if (@Vehicle_Specific::Position_Invert[LF_CORNER] == TRUE) duty = (100.0 - duty);
+    }
+    else
+    {
+      /* Position_Display is 0-100 */
+      if (Position_DC_Cmd[LF_CORNER] < 3) 
+      {
+         Position_DC_Cmd[LF_CORNER] = 3;
+      }
+      else if (Position_DC_Cmd[LF_CORNER] > 97)
+      {
+        Position_DC_Cmd[LF_CORNER] = 97;
+      }
+      
+      duty  = Position_DC_Cmd[LF_CORNER];
+    }
+    @Display::Position::LF = duty;
+    temp = duty*327.68;
+    tester_cmd.Tester_PWM_DC_LF = temp;
+}
+
+Output_Tester_Position_PWM_RF ()
+{
+    word temp;
+    float duty;
+  
+    if (@System::Position_Override_Enable::RF == TRUE)
+    {
+      duty = @System::Position_Override::RF;
+      if (duty < 0.0) duty = 0.0;
+      if (duty > 100.0) duty = 100.0;
+      if (@Vehicle_Specific::Position_Invert[RF_CORNER] == TRUE) duty = (100.0 - duty);
+    }
+    else
+    {
+      /* Position_Display is 0-100 */
+      if (Position_DC_Cmd[RF_CORNER] < 3) 
+      {
+         Position_DC_Cmd[RF_CORNER] = 3;
+      }
+      else if (Position_DC_Cmd[RF_CORNER] > 97)
+      {
+        Position_DC_Cmd[RF_CORNER] = 97;
+      }
+      
+      duty  = Position_DC_Cmd[RF_CORNER];
+    }
+    @Display::Position::RF = duty;
+    temp = duty*327.68;
+    tester_cmd.Tester_PWM_DC_RF = temp;
+}
+
+Output_Tester_Position_PWM_LR ()
+{
+    word temp;
+    float duty;
+  
+    if (@System::Position_Override_Enable::LR == TRUE)
+    {
+      duty = @System::Position_Override::LR;
+      if (duty < 0.0) duty = 0.0;
+      if (duty > 100.0) duty = 100.0;
+      if (@Vehicle_Specific::Position_Invert[LR_CORNER] == TRUE) duty = (100.0 - duty);
+    }
+    else
+    {
+      /* Position_Display is 0-100 */
+      if (Position_DC_Cmd[LR_CORNER] < 3) 
+      {
+         Position_DC_Cmd[LR_CORNER] = 3;
+      }
+      else if (Position_DC_Cmd[LR_CORNER] > 97)
+      {
+        Position_DC_Cmd[LR_CORNER] = 97;
+      }
+      
+      duty  = Position_DC_Cmd[LR_CORNER];
+    }
+    @Display::Position::LR = duty;
+    temp = duty*327.68;
+    tester_cmd.Tester_PWM_DC_LR = temp;
+    
+}
+
+Output_Tester_Position_PWM_RR ()
+{
+    word temp;
+    float duty;
+  
+    if (@System::Position_Override_Enable::RR == TRUE)
+    {
+      duty = @System::Position_Override::RR;
+      if (duty < 0.0) duty = 0.0;
+      if (duty > 100.0) duty = 100.0;
+      if (@Vehicle_Specific::Position_Invert[RR_CORNER] == TRUE) duty = (100.0 - duty);
+    }
+    else
+    {
+      /* Position_Display is 0-100 */
+      if (Position_DC_Cmd[RR_CORNER] < 3) 
+      {
+         Position_DC_Cmd[RR_CORNER] = 3;
+      }
+      else if (Position_DC_Cmd[RR_CORNER] > 97)
+      {
+        Position_DC_Cmd[RR_CORNER] = 97;
+      }
+      
+      duty  = Position_DC_Cmd[RR_CORNER];
+    }
+    @Display::Position::RR = duty;
+    temp = duty*327.68;
+    tester_cmd.Tester_PWM_DC_RR = temp;
+
+}
+
+Output_IAMM_Temperature ()
+{
+    float voltage; // 0-5 volt -40 (90%Vpwr) to 125 (10%Vpwr); 
+
+    //voltage = 5-(((4.0/165.0)*(IAMM_Temperature + 40)) + 0.5);
+    voltage = (-0.8/165.0 * (IAMM_Temperature + 40.0) + 0.9) * c_Tester_Temperature_Max_Voltage;
+	  tester_cmd.Tester_Temperature = voltage*4095/5;
+}
+
+Override_Manifold_Pressure()
+{
+  if (TRUE == @User::Manifold_Pressure_Override_Enable)
+  {
+    Final_Manifold_Pressure = Manual_Manifold_Pressure;
+  }
+  else
+  {
+    Final_Manifold_Pressure = Manifold_Pressure;
+  }
+}
+
+Output_Tester_Manifold_Pressure_P1 ()
+{
+    float voltage; // 0-5 volt
+  
+    voltage = (0.8/20 * Final_Manifold_Pressure + 0.1) * c_Tester_Temperature_Max_Voltage;
+  
+    if (voltage < 0)
+    {
+        voltage = 0.0;   
+    }    
+    else if (voltage > 5)
+    {
+        voltage = 5.0;
+    }
+    tester_cmd.Tester_Pressure_P1 = voltage*4095/5;   //12 Bit
+}
+
+Output_Tester_Manifold_Pressure_P2()
+{
+    int temp;
+    double voltage; // 0-5 volt
+  
+    voltage = (-(0.8/20) * Final_Manifold_Pressure + 0.9) * c_Tester_Manifold_Pressure_Max_Voltage;
+
+    if (voltage < 0)
+    {
+        voltage = 0.0;   
+    }    
+    else if (voltage > 5)
+    {
+        voltage = 5.0;
+    }
+    
+    if (@Fault::Pressure_Correlation_Fault == TRUE)     //add 1V to P2 
+    {
+      if ((voltage + 1) <= 5) 
+      {
+        voltage = voltage + 1;
+      }
+      else  
+      {
+        voltage = voltage - 1;
+      }
+    }
+    tester_cmd.Tester_Pressure_P2 = voltage*4095/5;   //12 Bit
+}
+
+Determine_PWM_DC()
+{
+  int i;
+  int axle_index;
+
+  axle_index = 0;
+  
+  for (i = LF_CORNER; i <= RR_CORNER; i++)
+  {
+      if (i >= LR_CORNER) 
+      {
+        axle_index = 1;
+      }
+      if (TRUE == @Vehicle_Specific::Position_Invert[i])
+      {
+          Position_DC_Cmd[i] = 100 - (@Vehicle_Specific::k_Position_PWM_Target[i] +
+              ((@Vehicle_Specific::Spring_Position[i] - Nominal_Trim_Height[axle_index]) / 
+                @Vehicle_Specific::k_Trim_Height_Gain[axle_index]));
+      }
+      else
+      {
+          Position_DC_Cmd[i] = @Vehicle_Specific::k_Position_PWM_Target[i] +
+              ((@Vehicle_Specific::Spring_Position[i] - Nominal_Trim_Height[axle_index]) / 
+                @Vehicle_Specific::k_Trim_Height_Gain[axle_index]);
+		  if (Position_DC_Cmd[i] > 100) Position_DC_Cmd[i] = 100;
+		  if (Position_DC_Cmd[i] < 0) Position_DC_Cmd[i] = 0;
+      }
+  }
+}
+
+on busOff
+{
+    write("Bus Off Active");
+}
+
+on warningLimit
+{
+    write("Bus Warning Active");
+}
+
+on sysvar System::IAMM_Temperature::Value
+{
+    IAMM_Temperature = @this;
+}
+
+on sysvar System::PS_Voltage::Value
+{
+    if (@sysvar::System::PS_Voltage::Value > 30)
+    {
+      @sysvar::System::PS_Voltage::Value = 30;
+    }
+    if (@sysvar::System::PS_Voltage::Value < 0)
+    {
+      @sysvar::System::PS_Voltage::Value = 0;
+    }
+    tester_cfg.PS_Voltage_Set = @sysvar::System::PS_Voltage::Value * 100;
+    output(tester_cfg);
+}
+
+on sysvar System::PS_Current_Limit::Value
+{
+    if (@sysvar::System::PS_Current_Limit::Value > 30)
+    {
+      @sysvar::System::PS_Current_Limit::Value = 30;
+    }
+    if (@sysvar::System::PS_Current_Limit::Value < 0)
+    {
+      @sysvar::System::PS_Current_Limit::Value = 0;
+    }
+    tester_cfg.PS_Current_Limit_Set = @sysvar::System::PS_Current_Limit::Value * 100;
+    output(tester_cfg);
+}
+
+on sysvar System::Manual_Manifold_Pressure::Value
+{
+    Manual_Manifold_Pressure = @this;
+}
+
+on sysvar Vehicle::Manifold_Pressure
+{
+    Manifold_Pressure = @this;
+}
+
+on sysvar System::Compressor_Temperature::Value
+{
+    Compressor_Temperature = @this;
+}
+
+on timer Timer_LF_Offset
+{
+  if (abs(@sysvar::Vehicle::Spring_Pressures[0] - @sysvar::Vehicle::Spring_Pressures_Offset_Target[0]) > 0.1)
+  {
+    setTimer (Timer_LF_Offset, 10);
+  }
+  else
+  {
+    @sysvar::System::LF_Leak_Enable = 0;
+    if ((@sysvar::System::LF_Leak_Enable == 0) && (@sysvar::System::RF_Leak_Enable == 0) && 
+        (@sysvar::System::LR_Leak_Enable == 0) && (@sysvar::System::RR_Leak_Enable == 0))
+    {
+      @sysvar::System::Leak_Enable = 0;
+    }
+  }
+}
+
+on timer Timer_RF_Offset
+{
+  if (abs(@sysvar::Vehicle::Spring_Pressures[1] - @sysvar::Vehicle::Spring_Pressures_Offset_Target[1]) > 0.1)
+  {
+    setTimer (Timer_RF_Offset, 10);
+  }
+  else
+  {
+    @sysvar::System::RF_Leak_Enable = 0;
+    if ((@sysvar::System::LF_Leak_Enable == 0) && (@sysvar::System::RF_Leak_Enable == 0) && 
+        (@sysvar::System::LR_Leak_Enable == 0) && (@sysvar::System::RR_Leak_Enable == 0))
+    {
+      @sysvar::System::Leak_Enable = 0;
+    }
+  }  
+}
+
+on timer Timer_LR_Offset
+{
+  if (abs(@sysvar::Vehicle::Spring_Pressures[2] - @sysvar::Vehicle::Spring_Pressures_Offset_Target[2]) > 0.1)
+  {
+    setTimer (Timer_LR_Offset, 10);
+  }
+  else
+  {
+    @sysvar::System::LR_Leak_Enable = 0;
+    if ((@sysvar::System::LF_Leak_Enable == 0) && (@sysvar::System::RF_Leak_Enable == 0) && 
+        (@sysvar::System::LR_Leak_Enable == 0) && (@sysvar::System::RR_Leak_Enable == 0))
+    {
+      @sysvar::System::Leak_Enable = 0;
+    }
+  }
+}
+
+on timer Timer_RR_Offset
+{
+  if (abs(@sysvar::Vehicle::Spring_Pressures[3] - @sysvar::Vehicle::Spring_Pressures_Offset_Target[3]) > 0.1)
+  {
+    setTimer (Timer_RR_Offset, 10);
+  }
+  else
+  {
+    @sysvar::System::RR_Leak_Enable = 0;
+    if ((@sysvar::System::LF_Leak_Enable == 0) && (@sysvar::System::RF_Leak_Enable == 0) && 
+        (@sysvar::System::LR_Leak_Enable == 0) && (@sysvar::System::RR_Leak_Enable == 0))
+    {
+      @sysvar::System::Leak_Enable = 0;
+    }
+  }
+}
+
+on sysvar sysvar::Vehicle::Spring_Pressures_Offset_Enable
+{
+  if (@sysvar::Vehicle::Spring_Pressures_Offset_Enable == 1)
+  {
+    if ((@sysvar::Vehicle::Spring_Pressures_Offset[0] > 0) || (@sysvar::Vehicle::Spring_Pressures_Offset[1] > 0) ||
+        (@sysvar::Vehicle::Spring_Pressures_Offset[2] > 0) || (@sysvar::Vehicle::Spring_Pressures_Offset[3] > 0))
+    {
+       @sysvar::System::Leak_Rate = abs(@sysvar::System::Leak_Rate);
+    }
+    else
+    {
+      @sysvar::System::Leak_Rate = -abs(@sysvar::System::Leak_Rate);
+    }
+    if (@sysvar::Vehicle::Spring_Pressures_Offset[0] != 0)
+    {
+      @sysvar::Vehicle::Spring_Pressures_Offset_Target[0] = @sysvar::Vehicle::Spring_Pressures[0] + @sysvar::Vehicle::Spring_Pressures_Offset[0];
+      @sysvar::System::LF_Leak_Enable = 1;
+      setTimer (Timer_LF_Offset, 10);
+      
+    }
+    if (@sysvar::Vehicle::Spring_Pressures_Offset[1] != 0)
+    {
+      @sysvar::Vehicle::Spring_Pressures_Offset_Target[1] = @sysvar::Vehicle::Spring_Pressures[1] + @sysvar::Vehicle::Spring_Pressures_Offset[1];
+      @sysvar::System::RF_Leak_Enable = 1;
+      setTimer (Timer_RF_Offset, 10);
+    }
+    if (@sysvar::Vehicle::Spring_Pressures_Offset[2] != 0)
+    {
+      @sysvar::Vehicle::Spring_Pressures_Offset_Target[2] = @sysvar::Vehicle::Spring_Pressures[2] + @sysvar::Vehicle::Spring_Pressures_Offset[2];
+      @sysvar::System::LR_Leak_Enable = 1;
+      setTimer (Timer_LR_Offset, 10);
+    }
+    if (@sysvar::Vehicle::Spring_Pressures_Offset[3] != 0)
+    {
+      @sysvar::Vehicle::Spring_Pressures_Offset_Target[3] = @sysvar::Vehicle::Spring_Pressures[3] + @sysvar::Vehicle::Spring_Pressures_Offset[3];
+      @sysvar::System::RR_Leak_Enable = 1;
+      setTimer (Timer_RR_Offset, 10);
+    }
+    
+    if ((@sysvar::System::LF_Leak_Enable == 0) || (@sysvar::System::RF_Leak_Enable == 0) || 
+        (@sysvar::System::LR_Leak_Enable == 0) || (@sysvar::System::RR_Leak_Enable == 0))
+    {
+      @sysvar::System::Leak_Enable = 1;
+    }
+  }
+  else
+  {
+    @sysvar::System::Leak_Enable = 0; 
+    @sysvar::System::LF_Leak_Enable = 0;
+    @sysvar::System::RF_Leak_Enable = 0;
+    @sysvar::System::LR_Leak_Enable = 0;
+    @sysvar::System::RR_Leak_Enable = 0;
+  }    
+}
+
+on message Tester_RET
+{
+  @Display::PCU_LF_Drive_On = this.LF_Fdbk;
+  @Display::PCU_RF_Drive_On = this.RF_Fdbk;
+  @Display::PCU_LR_Drive_On = this.LR_Fdbk;
+  @Display::PCU_RR_Drive_On = this.RR_Fdbk;
+  @Display::PCU_RES1_Drive_On = this.RES1_Fdbk;
+  @Display::PCU_RES2_Drive_On = this.RES2_Fdbk;
+  @Display::PCU_BST_Drive_On = this.BST_Fdbk;
+  @Display::PCU_DIV_Drive_On = this.DIV_Fdbk;
+  
+  @Display::Drive_Feedback::Compressor_Drive = (float)this.Comp_I_Fdbk/1000;
+  if (this.Comp_I_Fdbk > 600)
+    @Display::PCU_CMP_Drive_On = TRUE;
+  else
+    @Display::PCU_CMP_Drive_On = FALSE;
+  
+  @Display::Drive_Feedback::Exhaust_Drive = (float)this.Exh_I_Fdbk/1000;
+  if (this.Exh_I_Fdbk > 600)
+    @Display::PCU_EX_Drive_On = TRUE;
+  else
+    @Display::PCU_EX_Drive_On = FALSE;
+
+  @Display::Drive_Feedback::Damper1_Drive = (float)this.Damper1_I_Fdbk/1000;
+  if (this.Damper1_I_Fdbk > 200)
+    @Display::PCU_DMP1_Drive_On = TRUE;
+  else
+    @Display::PCU_DMP1_Drive_On = FALSE;
+
+  @Display::Drive_Feedback::Damper2_Drive = (float)this.Damper2_I_Fdbk/1000;
+  if (this.Damper2_I_Fdbk > 200)
+    @Display::PCU_DMP2_Drive_On = TRUE;
+  else
+    @Display::PCU_DMP2_Drive_On = FALSE;
+
+  @Display::Drive_Feedback::Damper3_Drive = (float)this.Damper3_I_Fdbk/1000;
+  if (this.Damper3_I_Fdbk > 200)
+    @Display::PCU_DMP3_Drive_On = TRUE;
+  else
+    @Display::PCU_DMP3_Drive_On = FALSE;
+  
+  @Display::Drive_Feedback::Damper4_Drive = (float)this.Damper4_I_Fdbk/1000;
+  if (this.Damper4_I_Fdbk > 200)
+    @Display::PCU_DMP4_Drive_On = TRUE;
+  else
+    @Display::PCU_DMP4_Drive_On = FALSE;
+  
+  @Display::Tester_Voltage = (float)this.PS_Voltage_Read/100;
+  @Display::Tester_Current = (float)this.PS_Current_Read/100;
+}
+
+on sysvar sysvar::System::Frequency_Override_Enable
+{
+  if (@sysvar::System::Frequency_Override_Enable)
+  {
+    @sysvar::System::Frequency_Override_Enable = 0;
+    tester_cfg.Tester_PWM_Freq_LF = @sysvar::Vehicle_Specific::Frequency_Override;
+    tester_cfg.Tester_PWM_Freq_RF = @sysvar::Vehicle_Specific::Frequency_Override;
+    tester_cfg.Tester_PWM_Freq_LR = @sysvar::Vehicle_Specific::Frequency_Override;
+    tester_cfg.Tester_PWM_Freq_RR = @sysvar::Vehicle_Specific::Frequency_Override;
+    output(tester_cfg);
+  }
+}
+
+on sysvar sysvar::System::ECU_Relay
+{
+  tester_cfg.ECU_Relay = @sysvar::System::ECU_Relay;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::IGN_HW
+{
+  tester_cfg.IGN_HW = @sysvar::System::IGN_HW;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_Damper1_Fdbk
+{
+  tester_cfg.Disable_Damper1_I_Fdbk = @sysvar::System::Disable_Damper1_Fdbk;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_Damper2_Fdbk
+{
+  tester_cfg.Disable_Damper2_I_Fdbk = @sysvar::System::Disable_Damper2_Fdbk;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_Damper3_Fdbk
+{
+  tester_cfg.Disable_Damper3_I_Fdbk = @sysvar::System::Disable_Damper3_Fdbk;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_Damper4_Fdbk
+{
+  tester_cfg.Disable_Damper4_I_Fdbk = @sysvar::System::Disable_Damper4_Fdbk;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_Compressor_Fdbk
+{
+  tester_cfg.Disable_Compressor_I_Fdbk = @sysvar::System::Disable_Compressor_Fdbk;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_Exhaust_Fdbk
+{
+  tester_cfg.Disable_Exhaust_I_Fdbk = @sysvar::System::Disable_Exhaust_Fdbk;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_P1_Outp
+{
+  tester_cfg.Disable_P1_Output = @sysvar::System::Disable_P1_Outp;
+  output(tester_cfg);
+}
+
+on sysvar sysvar::System::Disable_P2T_Outp
+{
+  tester_cfg.Disable_P2T_Output = @sysvar::System::Disable_P2T_Outp;
+  output(tester_cfg);
+}
